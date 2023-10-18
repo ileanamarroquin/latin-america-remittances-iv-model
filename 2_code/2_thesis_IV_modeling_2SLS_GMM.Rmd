@@ -1,0 +1,365 @@
+---
+title: "IV_modeling_2SLS_GMM"
+author: "Ileana Marroquin"
+date: "2023-10-13"
+output:
+ html_document:
+   toc: true
+   toc_depth: 3
+   theme: united
+   highlight: tango
+   css: my.css
+---
+
+# Thesis overview
+
+------------------------------------------------------------------------
+
+**Topic: Remittances Vs Public Finance Capacity. Impact Assessment in Reducing Income Inequality in Latin America: A Quasi-Experimental Analysis**
+
+**Abstract:** *Income inequality is a major challenge in Latin America, and remittances are often seen as a potential solution. However, the impact of remittances on income inequality is complex and contested. This thesis examines the impact of remittances on income inequality in Latin America at a macroeconomic level. It utilizes a 15- country, 20-year panel dataset sourced from the World Inequality Database and the World Income Inequality Database. To address endogeneity concerns, this study employs lagged remittances at 1 and 3-year intervals as instrumental variables. Both empirical approaches, namely 2SLS and GMM, indicate that remittances exhibit a weak and statistically insignificant effect on reducing income inequality in the absence of systematic fiscal redistribution. In contrast, public finance capacity demonstrates a statistically significant and more pronounced impact on reducing income inequality. These findings suggest that public finance capacity plays a pivotal role in reducing the Gini index in Latin America surpassing the impact of remittances. Therefore, policymakers should prioritize enhancing public finance capacity to alleviate income inequality.*
+
+**Study Hypothesis:**
+
+-   Ho1: Remittances do not reduce economic inequality
+
+-   Ho2: Remittances sent by migrants to LAC countries are less likely than government expenditure to reduce income inequality
+
+**Input:** the "database_for_IV_modeling.csv" processed database
+
+**Output:** Tables from the modeling and validity test relevant for Chapter 5 of the Thesis
+
+------------------------------------------------------------------------
+
+# 0. Settup
+
+```{r message=FALSE, warning=FALSE}
+# Loading the needed libraries
+library(dplyr)
+library(here)
+library(plm)
+library(stringr)
+library(readr)
+library(ggplot2)
+library(ggrepel)
+library(lubridate)
+library(sandwich)
+library(modelsummary)
+library(gt)
+library(flextable)
+library(broom)
+library(texreg)
+library(jtools)
+library(estimatr)
+library(parameters)
+
+# Loading the database
+ir_data<-read_csv(
+          here("1_processed_data","database_for_IV_modeling.csv"), na = ""
+          ) 
+
+str(ir_data)
+
+# Transformation of the dataframe to Paneldata
+pdata <- pdata.frame(
+          ir_data, index = c("country", "year")
+          )
+```
+
+# 1. IV Assumptions: running F statistic test
+
+```{r}
+# First stage IV for rm_l3 instrument
+
+IV1 <- iv_robust(gini ~ rm + gov_e + debt_s + ca_balance | 
+                  rm_l3 + gov_e + debt_s + ca_balance, 
+                  data = ir_data, diagnostics = TRUE)
+
+msummary(IV1, stars = c('*' = .1, '**' = .05, '***' = .01))
+```
+
+```{r}
+# Relevance rm_l3 test results
+
+IV1$diagnostic_first_stage_fstatistic
+scales::number(IV1$diagnostic_first_stage_fstatistic, accuracy = 0.01)
+```
+
+```{r}
+# First stage IV for rm_l1 instrument
+
+IV2 <- iv_robust(gini ~ rm + gov_e + debt_s + ca_balance | 
+                  rm_l1 + gov_e + debt_s + ca_balance, 
+                  data = ir_data, diagnostics = TRUE)
+
+msummary(IV2, stars = c('*' = .1, '**' = .05, '***' = .01))
+```
+
+```{r}
+# Relevance rm_l1 test results
+
+IV2$diagnostic_first_stage_fstatistic
+scales::number(IV2$diagnostic_first_stage_fstatistic, accuracy = 0.01)
+```
+
+```{r}
+# First stage Over-identification test for both IVs
+
+IV3 <- iv_robust(gini ~ rm + gov_e + debt_s + ca_balance | 
+                  rm_l1 + rm_l3 + gov_e + debt_s + ca_balance, 
+                  data = ir_data, diagnostics = TRUE)
+
+msummary(IV3, stars = c('*' = .1, '**' = .05, '***' = .01))
+```
+
+```{r}
+# Over-identification test results:
+# Cannot reject that the two diff effects are the same. No evidence of diff coeff. 
+# We can include both instrumets as instrumental variables. 
+
+IV3$diagnostic_overid_test
+scales::number(IV3$diagnostic_overid_test, accuracy = 0.01)
+```
+
+```{r}
+# First is important to estimate the first stage of the model 
+# Therefore, regress the treatment/endogenous variable on the controls and instruments 
+# (Method extracted from https://www.youtube.com/watch?v=9IIGTk_AH9c)
+
+FSmodels <- list(
+                "FS1y" =  lm(rm~rm_l1+gov_e+ca_balance+debt_s, data=ir_data),
+                "FS3y" = lm(rm~rm_l3+gov_e+ca_balance+debt_s, data=ir_data)
+                )
+
+modelsummary(FSmodels, stars=c('*' = .1, '**' = .05, '***' = .01)) #ADD , output = "FSIVmodels.docx"
+```
+
+```{r}
+# Manually calculating the second stage for both instruments
+
+FS1y <- lm(rm~rm_l1+gov_e+ca_balance+debt_s, data=ir_data)
+FS3y <- lm(rm~rm_l3+gov_e+ca_balance+debt_s, data=ir_data)
+
+set.seed(123)
+rm_l1_hat <- predict(FS1y)
+rm_l3_hat <- predict(FS3y)
+
+FSIVmmodels <- list(
+                    "FSIV 1y" =  lm(gini~rm_l1_hat+gov_e+ca_balance+debt_s, data=ir_data),
+                    "FSIV 3y" = lm(gini~rm_l3_hat+gov_e+ca_balance+debt_s, data=ir_data)
+                    )
+
+modelsummary(FSIVmmodels, stars=c('*' = .1, '**' = .05, '***' = .01)) #ADD , output = "FSIVmodels.docx"
+```
+
+# 2. OLS Modeling
+
+```{r warning=FALSE}
+# Transformation of the dataframe to Paneldata
+
+library(plm)
+  
+pdata <- pdata.frame(ir_data, index = c("country", "year"))
+
+```
+
+```{r}
+# OLS Rm impact on inequality
+
+OLSmodels <- list(
+                  "OLS 1" = lm(gini ~ rm, data = pdata),
+                  "OLS 2" = lm(gini ~ rm + gov_e + debt_s + ca_balance, data = pdata),
+                  "OLS 1y" = lm(gini ~ rm_l1 + gov_e + debt_s + ca_balance, data = pdata),
+                  "OLS 3y" = lm(gini ~ rm_l3 + gov_e + debt_s + ca_balance, data = pdata)
+                  )
+
+msummary(OLSmodels, stars = c('*' = .1, '**' = .05, '***' = .01))
+```
+
+```{r}
+# Applying fixed effects at a year and country level
+  
+FEmodels <- list(
+                  "FE Current Rm" = plm(gini ~ rm + gov_e + debt_s + ca_balance + factor(country), 
+                                    data = pdata, model = "within", index = c("country")),
+                  "FE Rm 1y" = plm(gini ~ rm_l1 + gov_e + debt_s + ca_balance + factor(country), 
+                                   data = pdata, model = "within", index = c("country")),
+                  "FE Rm 3y" = plm(gini ~ rm_l3 + gov_e + debt_s + ca_balance + factor(country), 
+                                    data = pdata, model = "within", index = c("country"))
+                )
+  
+msummary(FEmodels, stars = c('*' = .1, '**' = .05, '***' = .01))
+```
+
+# 3. IV Modeling: Testing two null hypoteses
+
+```{r message=FALSE}
+#Attaching packages that will be used for calculating 2SLS
+library(tidyverse)
+library(parameters)
+library(modelsummary)
+library(fixest)
+```
+
+## 3.1. 2SLS models
+
+-   **Instrument: 1-year lagged Remittances**
+
+```{r}
+#2SLS MODELING - instrument is rm_l1 
+
+itest_rm_l1 <- feols(gini ~ gov_e + debt_s + 
+            factor(country) | rm ~ rm_l1, 
+            cluster = ~incomegroup, data = ir_data)
+
+msummary(list('First Stage' = itest_rm_l1$iv_first_stage[[1]],
+                'Second Stage' = itest_rm_l1),
+                coef_rm_l1 = c(
+                                rm_l1 = '1 Year lagged Remmitances',
+                                fit_rm = 'Remmitances'),         
+                stars = c('*' = .1, '**' = .05, '***' = .01))
+```
+
+-   **Instrument: 3-year lagged Remittances**
+
+```{r}
+
+#2SLS MODELING - intrument is rm_l3 
+itest_rm_l3 <- feols(gini ~ gov_e + debt_s + ca_balance +
+            factor(country) | rm ~ rm_l3, 
+            cluster = ~incomegroup, data = ir_data)
+
+msummary(list('First Stage' = itest_rm_l3$iv_first_stage[[1]],
+                'Second Stage' = itest_rm_l3),
+                coef_rm_l3 = c(rm_l3 = '3 Year lagged Remmitances',
+                fit_rm = 'Remmitances'),         
+                stars = c('*' = .1, '**' = .05, '***' = .01),
+         output = "S2LSVmodel_rm3.docx")
+```
+
+## 3.2. GMM models
+
+```{r}
+# Specific libraries needed for this estimations
+library(modelsummary)
+library(gmm)
+library(sandwich)
+```
+
+-   **y= gini \| Instruments: 1 and 3-years lagged Remittances \| Testing Ho1**
+
+```{r}
+#GMM MODELING - y= gini, instrument are rm_l1 and rm_l3
+GMMMmodel <- gmm(gini ~ gov_e + ca_balance + debt_s +
+                  factor(country) + rm, 
+                  ~ gov_e + ca_balance + debt_s +
+                  factor(country) + rm_l3 + rm_l1, data = ir_data
+                  )
+
+#Applying clustering at income group level
+msummary(GMMMmodel, vcov = ~incomegroup, stars = c('*' = .1, '**' = .05, '***' = .01))
+```
+
+# 4. Robustness Test and Extended Analysis
+
+```{r}
+# Load important library
+library(lmtest)
+```
+
+## 4.1 Validity Tests
+
+```{r}
+# Running the Durbin-Wu-Hausman test GMM related dto Ho1
+
+gmm_gini_validity <- lm(gini ~ gov_e + ca_balance + debt_s + factor(country) + rm, data = ir_data)
+
+
+durbin_wu_hausman_test_gmm_gini <- dwtest(gmm_gini_validity, alternative = "greater")
+
+
+print(durbin_wu_hausman_test_gmm_gini)
+```
+
+```{r}
+# Running the Durbin-Wu-Hausman test for the GMM related to Ho2
+
+gmm_h2_validity <- lm(palma ~ debt_s + rm + ca_balance + factor(country) + gov_e, data = ir_data)
+
+
+durbin_wu_hausman_test_gmm_h2 <- dwtest(gmm_h2_validity, alternative = "greater")
+
+
+print(durbin_wu_hausman_test_gmm_h2)
+
+```
+
+## 4.2 Different Dependent Variables
+
+```{r}
+# GMM MODELING - y= palma, instrument are rm_l1 and rm_l3
+# Palma index= β_0+ β_1 (Rm) ̂+β_2 Control variables+ε                                                    (5.1)
+
+GMMMmodel_palma <- gmm(palma ~ gov_e + ca_balance + debt_s +
+                        factor(country) + rm, 
+                        ~ gov_e + ca_balance + debt_s +
+                        factor(country) + rm_l3 + rm_l1, data = ir_data)
+
+#GMM MODELING - y= theil, instrument are rm_l1 and rm_l3
+#Theil index= β_0+ β_1 (Rm) ̂+β_2 Control variables+ε                                                     (5.2)
+
+GMMMmodel_theil <- gmm(theil ~ gov_e + ca_balance + debt_s +
+                        factor(country) + rm, 
+                        ~ gov_e + ca_balance + debt_s +
+                        factor(country) + rm_l3 + rm_l1, data = ir_data)
+
+
+
+# Summary table for the 3 GMM models (gini, palma and theil) 
+msummary(list(GMMMmodel, GMMMmodel_palma, GMMMmodel_theil), 
+         vcov = ~incomegroup, 
+         stars = c('*' = .1, '**' = .05, '***' = .01))
+```
+
+```{r}
+# Performing Variables transformations to test Ho2
+#  Generating new lagged variables
+library(Hmisc)
+
+ire_data <- ir_data  %>%
+            mutate(Lag(debt_s, -1)) %>%
+            mutate(Lag(debt_s, -3))
+
+# Consolidating new dataframe with new instrumental variables and renaming proceure 
+ire_data <- ire_data  %>%
+            rename(debt_s_l1 = `Lag(debt_s, -1)`) %>%
+            rename(debt_s_l3 = `Lag(debt_s, -3)`) 
+
+head(ire_data)
+```
+
+-   **y= palma \| Instruments: 1 and 3-years lagged debt \| Testing Ho1**
+
+```{r}
+# GMM MODELING - y= palma, instrument are debt_s_l1 and debt_s_l3
+
+# Gov Exp= γ_0+ γ_1 〖Debt Service〗\_(1 or 3 years lagged)+γ_2 Control variables+ υ\
+# Palma index= β_0+ β_1 (Gov Exp) ̂+β_2 Control variables+ ε
+
+ire_data <- ire_data %>%
+            select(palma, gini, gov_e, ca_balance, rm, debt_s, year, 
+            country, incomegroup, debt_s_l1, debt_s_l3) %>%
+             na.omit()
+
+
+GMMMmodel_h2 <- gmm(palma ~ ca_balance + rm +
+                    factor(country) + gov_e, 
+                    ~ gov_e + ca_balance + rm +
+                    factor(country) + debt_s_l1 + debt_s_l3, data = ire_data)
+
+#Applying clustering at income group level
+msummary(list(GMMMmodel_palma, GMMMmodel_h2), vcov = ~incomegroup, 
+         stars = c('*' = .1, '**' = .05, '***' = .01))
+```
+
+

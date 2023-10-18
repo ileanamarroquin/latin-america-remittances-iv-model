@@ -1,0 +1,190 @@
+---
+title: "Thesis_descriptive_analysis"
+author: "Ileana Marroquin"
+date: "2023-10-13"
+output: 
+ html_document:
+   toc: true
+   toc_depth: 3
+   theme: united
+   highlight: tango
+   css: my.css
+---
+
+------------------------------------------------------------------------
+
+## Observational Results [Thesis Chapter 5, subsection 5.1.1]
+
+-   Input: "merged_database_to_analyze.csv" file
+
+-   Output: Descriptive visualizations for Chapter 5 of the thesis and the appendix and the "database_for_IV_modeling.csv" that will be used for the modeling script
+
+------------------------------------------------------------------------
+
+### 0. Settup
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+# Loadig the libraries needed
+library(dplyr)
+library(here)
+library(stringr)
+library(readr)
+library(ggplot2)
+library(ggrepel)
+library(lubridate)
+library(sandwich)
+
+#Loading the database
+df<-read_csv(
+    here("1_processed_data","merged_database_to_analyze.csv"), na = ""
+    ) 
+
+#Take a look of the variables format
+glimpse(df)
+```
+
+### 1. Preparing the Variables
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+#Convert the 'year' variable to date format with "%Y" format
+df$year <- as.Date(
+            as.character(df$year), 
+            format = "%Y", "-01-01", sep = "") # Ashtung (!): Please enter today's dd & mm
+str(df)
+
+#Rename variable
+df <- df %>%
+      rename(ca_balance = curr_acc_balance)
+
+```
+
+### 2. Initial visualizations: Correlation and Distribution
+
+```{r}
+#Boxplotting for looking the distribution per income group
+ggplot (df, aes(incomegroup,rm)) + geom_boxplot(outlier.colour="red",
+        outlier.shape=8, outlier.size=4) +
+        theme_minimal() +
+        labs(x = "Income Group category", y = "Remittances as % of the GDP") +
+        ggtitle("Remitnces received by Income Group distribution (2000-2019)") +
+        theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+```
+
+```{r}
+# Building a heat map to overiew remittances as % of the GDP 
+df %>% ggplot(
+      aes(year, reorder(country, gini), fill = gini)) +
+      geom_tile(color = "grey") +
+      guides(fill = guide_legend(title = "Gini index"))
+```
+
+```{r}
+# Building a heat map to overview government expenditure
+df %>% ggplot(
+            aes(year, reorder(country, gov_e), fill = gov_e)) +
+            geom_tile(color = "grey") +
+            guides(fill = guide_legend(title = "GovExpenditure (GDP %)"))
+```
+
+```{r}
+# Filter the data for the desired year
+glimpse(df)
+filtered_data <- dplyr::filter(df, year == as.Date("2019-10-18"))
+
+
+# Plot the correlation
+ggplot(filtered_data, aes(rm, gini, label = country)) +
+      geom_point(alpha = 0.7) + 
+      theme_minimal() +
+      labs(x = "Remittances as % of the GDP", y = "Gini index") +
+      geom_text_repel() +
+      ggtitle("Correlation between Remittances and Gini Index (2019)") +
+      theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+```
+
+```{r}
+# Load GGally package
+library(GGally)
+corr_ir_data <- filtered_data
+
+# Select variables in position 5 to 9 and 11
+selected_vars <- select(corr_ir_data, c(6:12))
+
+
+# Calculate and print correlation matrix
+cor_matrix <- cor(selected_vars, use = "pairwise.complete", method = "pearson")
+print(cor_matrix)
+
+# Creating correlation plot using ggcorr function from GGally package
+ggcorr(selected_vars, label = TRUE) +
+      theme_minimal() +
+      labs(title = "Correlation Plot of Income Inequaity, Public Capacity and Remittances (2019)") +
+        theme(plot.title = element_text(hjust = 0.4, face = "bold")) +
+        guides(fill = guide_legend(title = "Correlation"))
+```
+
+### 3. Descriptive Visualization: Zooming into key variables
+
+```{r}
+# Loading the required packages for obtining Descriptive Statistics
+
+library(summarytools)
+descr(selected_vars)
+```
+
+```{r}
+# Load the required packages
+library(ggplot2)
+
+# Remitances Histogram
+remittances_hist <- ggplot(data = df, aes(x = rm)) +
+                    geom_histogram(binwidth = 1, fill = "#0F3566") +
+                    xlab("Remitances") +
+                    ylab("Frequency") +
+                    ggtitle("Histogram of Remitances") +
+                    theme(plot.title = element_text(hjust = 0.5))
+
+# Gini Histogram
+gini_hist <- ggplot(data = df, aes(x = gini)) +
+              geom_histogram(binwidth = 1, fill = "#0F3566") +
+              xlab("Gini Index") +
+              ylab("Frequency") +
+              ggtitle("Histogram of Gini index") +
+              theme(plot.title = element_text(hjust = 0.5))
+              
+
+# Government Expenditure Histogram
+gov_exp_hist <- ggplot(data = df, aes(x = gov_e)) +
+                geom_histogram(binwidth = 1, fill = "#0F3566") +
+                xlab("General government final consumption expenditure \n (% of GDP)") +
+                ylab("Frequency") +
+                ggtitle("Histogram of government expenditure") +
+                theme(plot.title = element_text(hjust = 0.5))
+
+# Debt Service Histogram
+debt_service_hist <- ggplot(data = df, aes(x = debt_s)) +
+                      geom_histogram(binwidth = 1, fill = "#0F3566") +
+                      xlab("Total debt service \n (% of exports of goods, \n services and primary income)") +
+                      ylab("Frequency") +
+                      ggtitle("Histogram of Total debt service") +
+                      theme(plot.title = element_text(hjust = 0.5))
+
+# Create the 4-panel histogram graph
+four_panel_hist <- gridExtra::grid.arrange(
+                    remittances_hist,
+                    gini_hist,
+                    gov_exp_hist,
+                    debt_service_hist, ncol = 2)
+
+# Display the 4-panel histogram graph
+print(four_panel_hist)
+
+```
+
+### 4. Save the output
+
+```{r}
+# Save the final data for modeling
+ir_data <- df
+write.csv(ir_data, file = here("1_processed_data","database_for_IV_modeling.csv"), row.names = FALSE)
+```
