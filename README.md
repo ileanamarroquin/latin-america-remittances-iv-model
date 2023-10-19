@@ -22,7 +22,7 @@ Likewise, note that every script starts with a small README section where a brie
 
 ## How to Reproduce the Results?
 
--   Clone this repository to your server
+-   Fork/Clone this repository to your server
 
 -   The folders and the scripts have a number in the beginning to indicate the execution order, therefore start in `/1_processed_data` and open the `/1_wiid_dataframe.R` as the initial script.
 
